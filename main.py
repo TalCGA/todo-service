@@ -54,3 +54,26 @@ def create_task(task_input: TaskInput):
     except sqlite3.Error as e:
         print(f"[DB ERROR] create_task failed: {e}")
         raise HTTPException(status_code=500, detail="Database error")
+
+@app.get("/tasks/{task_id}", response_model=Task)
+def get_task(task_id: uuid.UUID):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (str(task_id),)
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        d = dict(row)
+        d["status"] = Status(d["status"])
+        return Task(**d)
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: uuid.UUID):
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM tasks WHERE id = ?", (str(task_id),))
+
+        if not cur.rowcount:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
