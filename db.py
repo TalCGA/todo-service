@@ -1,8 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_FILE = "todo.db"
-
+DB_FILE = Path(__file__).resolve().with_name("todo.db")
 
 
 def get_conn() -> sqlite3.Connection:
