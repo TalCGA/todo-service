@@ -1,6 +1,8 @@
 from dbm import sqlite3
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from contextlib import asynccontextmanager
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from db import init_db, get_conn
 from schemas import Status, TaskInput, Task
 from datetime import datetime, timezone
@@ -16,6 +18,14 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="ToDo Service" , lifespan=lifespan)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Customize the response for validation errors
+    return JSONResponse(
+        status_code=400,
+        content={"detail": exc.errors()},
+    )
 
 @app.get("/tasks", response_model=list[Task])
 def list_tasks():
@@ -76,4 +86,31 @@ def delete_task(task_id: uuid.UUID):
 
         if not cur.rowcount:
             raise HTTPException(status_code=404, detail="Task not found")
-        
+
+@app.put("/tasks/{task_id}", response_model=Task)
+def update_task(task_id: uuid.UUID, payload: TaskInput):
+    with get_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM tasks WHERE id = ?", (str(task_id),)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        now = now_utc_iso()
+        conn.execute(
+            """
+            UPDATE tasks
+            SET title = ?, description = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (payload.title, payload.description, payload.status.value, now, str(task_id)),
+        )
+
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (str(task_id),)
+        ).fetchone()
+
+        d = dict(row)
+        d["status"] = Status(d["status"])
+        return Task(**d)
+    
