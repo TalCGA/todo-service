@@ -1,8 +1,10 @@
 from dbm import sqlite3
+from click import UUID
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from db import init_db, get_conn
 from schemas import Status, TaskInput, Task
 from datetime import datetime, timezone
@@ -34,9 +36,9 @@ def list_tasks():
 
         tasks: list[Task] = []
         for row in rows:
-            d = dict(row)
-            d["status"] = Status(d["status"]) 
-            tasks.append(Task(**d))
+            task = dict(row)
+            task["status"] = Status(task["status"]) 
+            tasks.append(Task(**task))
 
         return tasks 
 
@@ -75,9 +77,9 @@ def get_task(task_id: uuid.UUID):
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        d = dict(row)
-        d["status"] = Status(d["status"])
-        return Task(**d)
+        res = dict(row)
+        res["status"] = Status(res["status"])
+        return Task(**res)
 
 @app.delete("/tasks/{task_id}", status_code=204)
 def delete_task(task_id: uuid.UUID):
@@ -110,7 +112,53 @@ def update_task(task_id: uuid.UUID, payload: TaskInput):
             "SELECT * FROM tasks WHERE id = ?", (str(task_id),)
         ).fetchone()
 
-        d = dict(row)
-        d["status"] = Status(d["status"])
-        return Task(**d)
+        res = dict(row)
+        res["status"] = Status(res["status"])
+        return Task(**res)
     
+@app.patch("/tasks/{task_id}", response_model=Task)
+async def patch_task(task_id: uuid.UUID, request: Request):
+    data = await request.json()
+    allowed = {"title", "description", "status"}
+    unknown = set(data) - allowed
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown fields: {sorted(unknown)}")
+
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        current = dict(row)
+
+        if "status" in data:
+            try:
+                data["status"] = Status(data["status"]).value
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid status")
+
+        merged = {**current, **data}
+
+        try:
+            validated = TaskInput.model_validate({
+                "title": merged["title"],
+                "description": merged.get("description"),
+                "status": Status(merged["status"]),
+            })
+        except ValidationError as e:
+            raise RequestValidationError(e.errors())
+
+        now = now_utc_iso()
+        conn.execute(
+            """
+            UPDATE tasks
+            SET title = ?, description = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (validated.title, validated.description, validated.status.value, now, str(task_id)),
+        )
+
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+        res = dict(row)
+        res["status"] = Status(res["status"])
+        return Task(**res)
