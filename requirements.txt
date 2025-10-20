@@ -1,0 +1,1 @@
+pip freeze | grep -E 'fastapi|uvicorn|pydantic' > requirements.txt

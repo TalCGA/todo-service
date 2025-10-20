@@ -1,4 +1,5 @@
 from dbm import sqlite3
+from typing import Optional
 from click import UUID
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -30,17 +31,61 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 @app.get("/tasks", response_model=list[Task])
-def list_tasks():
+def list_tasks(
+    status: Status | None = None,
+    date_field_filter: str = "created_at",     
+    since: str | None = None,          
+    until: str | None = None,           
+    sort: str = "created_at",          
+    direction: str = "desc",    
+    limit: int = 50,
+    offset: int = 0,
+):
+    errors = []
+
+    ALLOWED_DATE_FIELDS = {"created_at", "updated_at"}
+    ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "status"}
+    ALLOWED_DIRS = {"asc", "desc"}
+
+    if date_field_filter not in ALLOWED_DATE_FIELDS:
+        errors.append(f"Invalid date_field: {date_field_filter}")
+    if sort not in ALLOWED_SORT_FIELDS:
+        errors.append(f"Invalid sort field: {sort}")
+    if direction not in ALLOWED_DIRS:
+        errors.append(f"Invalid direction: {direction}")
+    if not (1 <= limit <= 100):
+        errors.append("limit must be between 1 and 100")
+    if offset < 0:
+        errors.append("offset must be >= 0")
+
+    if errors:
+        raise HTTPException(status_code=400, detail=errors)
+
+    if sort == "status":
+        order_by = f"CASE status WHEN 'open' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'done' THEN 3 END {direction.upper()}"
+    else:
+        order_by = f"{sort} {direction.upper()}"
+
+    sql = f"""
+    SELECT * FROM tasks
+    WHERE (:status IS NULL OR status = :status)
+      AND (:since  IS NULL OR substr({date_field_filter}, 1, 10) >= :since)
+      AND (:until  IS NULL OR substr({date_field_filter}, 1, 10) <= :until)
+    ORDER BY {order_by}
+    LIMIT :limit OFFSET :offset
+    """
+
+    params = {
+        "status": status.value if status else None,
+        "since": since,
+        "until": until,
+        "limit": limit,
+        "offset": offset,
+    }
+
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
-
-        tasks: list[Task] = []
-        for row in rows:
-            task = dict(row)
-            task["status"] = Status(task["status"]) 
-            tasks.append(Task(**task))
-
-        return tasks 
+        rows = conn.execute(sql, params).fetchall()
+        return [Task(**{**dict(r), "status": Status(r["status"])}) for r in rows]
 
 @app.post("/tasks", response_model=Task, status_code=201)
 def create_task(task_input: TaskInput):
