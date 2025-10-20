@@ -195,3 +195,14 @@ def patch_task(task_id: UUID, data: Dict[str, Any]) -> Task:
         task_dict = dict(row)
         task_dict["status"] = Status(task_dict["status"])
         return Task(**task_dict)
+
+
+def get_task_stats() -> dict[str, int]:
+    sql = """
+        SELECT status, COUNT(*) AS count
+        FROM tasks
+        GROUP BY status
+    """
+    with get_conn() as conn:
+        rows = conn.execute(sql).fetchall()
+    return {r["status"]: r["count"] for r in rows}

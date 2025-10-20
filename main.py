@@ -52,6 +52,10 @@ def list_tasks(
 def create_task(task_input: TaskInput)-> Task:
     return tasks_service.create_task(task_input)
 
+@app.get("/tasks/stats", response_model=dict[str, int])
+def tasks_stats():
+    return tasks_service.get_task_stats()
+
 @app.get("/tasks/{task_id}", response_model=Task)
 def get_task(task_id: UUID):
     return tasks_service.get_task(task_id)
